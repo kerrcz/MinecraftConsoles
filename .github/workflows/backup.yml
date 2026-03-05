@@ -1,14 +1,28 @@
 name: Backup Nightly to Google Drive
 
 on:
+  schedule:
+    - cron: '0 0 * * *' # Wakes up automatically every day at midnight UTC
   release:
     types: [published]
-  workflow_dispatch: # This adds a button so you can test it manually
+  workflow_dispatch: # Keeps your manual "Test" button
 
 jobs:
-  backup:
+  sync_and_backup:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Sync Fork with Original
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # This pulls the latest code from the original creator into your fork
+          gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
+
       - name: Get Current Timestamp
         id: time
         run: echo "timestamp=$(date +'%Y-%m-%d_%H-%M')" >> $GITHUB_OUTPUT
@@ -19,16 +33,18 @@ jobs:
       - name: Configure Rclone
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          cat << EOF > ~/.config/rclone/rclone.conf
+          ${{ secrets.RCLONE_CONF }}
+          EOF
 
-      - name: Download Release Assets
+      - name: Download Release Assets and Source Code
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Grabs all files from the latest release
-          gh release download --repo ${{ github.repository }} --dir ./backup_files
+          # Downloads compiled files AND source code as a zip
+          gh release download --repo smartcmd/MinecraftConsoles --latest --dir ./backup_files --pattern '*' --archive zip
 
       - name: Upload to Google Drive
         run: |
           FOLDER_NAME="Nightly_${{ steps.time.outputs.timestamp }}"
-          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "$FOLDER_NAME"
+          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "$FOLDER_NAME" -vv
