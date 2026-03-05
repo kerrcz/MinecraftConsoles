@@ -1,50 +1,69 @@
-name: Backup Nightly to Google Drive
+name: Smart Hourly Nightly Backup
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Wakes up automatically every day at midnight UTC
-  release:
-    types: [published]
-  workflow_dispatch: # Keeps your manual "Test" button
+    - cron: '17 * * * *' # Runs every hour at the 17th minute
+  workflow_dispatch:
 
 jobs:
-  sync_and_backup:
+  check_and_backup:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Crucial: Allows the script to update the 'last_seen' file
     steps:
       - name: Checkout Fork
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
-      - name: Sync Fork with Original
+      - name: Sync Fork
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
+
+      - name: Get Latest Release Tag
+        id: get_tag
         run: |
-          # This pulls the latest code from the original creator into your fork
-          gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
+          # Fetch the tag name of the absolute latest release
+          TAG=$(gh release view --repo smartcmd/MinecraftConsoles --json tagName --jq '.tagName')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Latest release found is: $TAG"
 
-      - name: Get Current Timestamp
-        id: time
-        run: echo "timestamp=$(date +'%Y-%m-%d_%H-%M')" >> $GITHUB_OUTPUT
-
-      - name: Install Rclone
-        run: sudo apt-get install -y rclone
-
-      - name: Configure Rclone
+      - name: Check if Version is New
+        id: check
         run: |
-          mkdir -p ~/.config/rclone
-          cat << EOF > ~/.config/rclone/rclone.conf
-          ${{ secrets.RCLONE_CONF }}
-          EOF
+          # Read the last backed-up version from a local file
+          if [ -f .last_backup_tag ] && [ "$(cat .last_backup_tag)" == "${{ steps.get_tag.outputs.tag }}" ]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+            echo "No new version detected. Skipping backup."
+          else
+            echo "match=false" >> $GITHUB_OUTPUT
+            echo "New version detected! Starting backup..."
+          fi
 
-      - name: Download Release Assets and Source Code
+      - name: Backup to Google Drive
+        if: steps.check.outputs.match == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Downloads compiled files AND source code as a zip
-          gh release download --repo smartcmd/MinecraftConsoles --latest --dir ./backup_files --pattern '*' --archive zip
-
-      - name: Upload to Google Drive
-        run: |
-          FOLDER_NAME="Nightly_${{ steps.time.outputs.timestamp }}"
-          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "$FOLDER_NAME" -vv
+          # 1. Prepare Timestamp
+          TIMESTAMP=$(date +'%Y-%m-%d_%H-%M')
+          
+          # 2. Install & Config Rclone
+          sudo apt-get install -y rclone
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          
+          # 3. Download both compiled assets and source code
+          gh release download latest --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*' --archive zip
+          
+          # 4. Upload to Drive
+          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "Nightly_$TIMESTAMP" -vv
+          
+          # 5. Remember this version so we don't backup again next hour
+          echo "${{ steps.get_tag.outputs.tag }}" > .last_backup_tag
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add .last_backup_tag
+          git commit -m "Update last backup tag to ${{ steps.get_tag.outputs.tag }}"
+          git push
