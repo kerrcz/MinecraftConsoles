@@ -1,0 +1,34 @@
+name: Backup Nightly to Google Drive
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # This adds a button so you can test it manually
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Current Timestamp
+        id: time
+        run: echo "timestamp=$(date +'%Y-%m-%d_%H-%M')" >> $GITHUB_OUTPUT
+
+      - name: Install Rclone
+        run: sudo apt-get install -y rclone
+
+      - name: Configure Rclone
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
+      - name: Download Release Assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Grabs all files from the latest release
+          gh release download --repo ${{ github.repository }} --dir ./backup_files
+
+      - name: Upload to Google Drive
+        run: |
+          FOLDER_NAME="Nightly_${{ steps.time.outputs.timestamp }}"
+          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "$FOLDER_NAME"
