@@ -2,8 +2,8 @@ name: Smart Hourly Nightly Backup
 
 on:
   schedule:
-    - cron: '17 * * * *' # Runs at the 17th minute of every hour
-  workflow_dispatch: # Your manual test button
+    - cron: '17 * * * *' 
+  workflow_dispatch: 
 
 jobs:
   check_and_backup:
@@ -24,9 +24,10 @@ jobs:
       - name: Get Latest Release Tag
         id: get_tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Fixed the missing token here
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh release view --repo smartcmd/MinecraftConsoles --json tagName --jq '.tagName')
+          # We ask for a list of all releases (including pre-releases) and grab the newest one at the top
+          TAG=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName --jq '.[0].tagName')
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Latest release found is: $TAG"
 
@@ -51,10 +52,12 @@ jobs:
           # Install & Config Rclone
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          cat << EOF > ~/.config/rclone/rclone.conf
+          ${{ secrets.RCLONE_CONF }}
+          EOF
           
-          # Download assets and source
-          gh release download latest --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*' --archive zip
+          # Download using the EXACT tag we found in the earlier step instead of the word 'latest'
+          gh release download "${{ steps.get_tag.outputs.tag }}" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*' --archive zip
           
           # Upload to Drive
           rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "Nightly_$TIMESTAMP" -vv
