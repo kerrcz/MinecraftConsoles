@@ -26,7 +26,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Grabs the absolute newest tag from the list
           TAG=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName --jq '.[0].tagName')
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Latest release found is: $TAG"
@@ -56,14 +55,14 @@ jobs:
           ${{ secrets.RCLONE_CONF }}
           EOF
           
-          # 1. Download compiled assets (the .exe, .jar, etc.)
+          # 1. Download compiled assets
           gh release download "${{ steps.get_tag.outputs.tag }}" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
           
-          # 2. Download source code zip separately!
+          # 2. Download source code zip
           gh release download "${{ steps.get_tag.outputs.tag }}" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
           
-          # Upload everything to Drive
-          rclone copy ./backup_files gdrive: --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} --path-override "Nightly_$TIMESTAMP" -vv
+          # 3. Upload to Drive (THIS LINE IS FIXED)
+          rclone copy ./backup_files "gdrive:Nightly_$TIMESTAMP" --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} -vv
           
           # Save this tag so we don't repeat the backup next hour
           echo "${{ steps.get_tag.outputs.tag }}" > .last_backup_tag
