@@ -50,7 +50,6 @@ jobs:
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
           
-          # [THE FIX IS HERE] Safely writing the multi-line config
           cat << EOF > ~/.config/rclone/rclone.conf
           ${{ secrets.RCLONE_CONF }}
           EOF
@@ -66,4 +65,8 @@ jobs:
           git config user.email "action@github.com"
           git add .last_backup_info
           git commit -m "Update last backup info: ${{ steps.get_info.outputs.info }}"
+          
+          # [THE FIX] This pulls the synced code to prevent the "failed to push" error
+          git pull --rebase origin main
+          
           git push
