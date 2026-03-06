@@ -26,7 +26,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # This grabs the Tag AND the Date it was published
           INFO=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName,publishedAt --jq '.[0] | "\(.tagName)@\(.publishedAt)"')
           echo "info=$INFO" >> $GITHUB_OUTPUT
           echo "Latest release info: $INFO"
@@ -34,7 +33,6 @@ jobs:
       - name: Check if Version or Date is New
         id: check
         run: |
-          # We compare the "Tag@Date" string to our memory file
           if [ -f .last_backup_info ] && [ "$(cat .last_backup_info)" == "${{ steps.get_info.outputs.info }}" ]; then
             echo "match=true" >> $GITHUB_OUTPUT
             echo "No changes in tag or date. Skipping."
@@ -51,16 +49,18 @@ jobs:
           TIMESTAMP=$(date +'%Y-%m-%d_%H-%M')
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
           
-          # We extract just the Tag from our info string to download it
+          # [THE FIX IS HERE] Safely writing the multi-line config
+          cat << EOF > ~/.config/rclone/rclone.conf
+          ${{ secrets.RCLONE_CONF }}
+          EOF
+          
           TAG=$(echo "${{ steps.get_info.outputs.info }}" | cut -d'@' -f1)
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
           
           rclone copy ./backup_files "gdrive:Nightly_$TIMESTAMP" --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} -vv
           
-          # Save the new "Tag@Date" info to memory
           echo "${{ steps.get_info.outputs.info }}" > .last_backup_info
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
