@@ -1,16 +1,15 @@
-name: Super-Smart 15-Minute Backup
+name: 15-Min Backup with Commit Hash
 
 on:
   schedule:
-    # Runs every 15 minutes (e.g., :00, :15, :30, :45 past the hour)
     - cron: '*/15 * * * *' 
-  workflow_dispatch: # Your manual test button
+  workflow_dispatch: 
 
 jobs:
   check_and_backup:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Allows saving the memory file
+      contents: write
     steps:
       - name: Checkout Fork
         uses: actions/checkout@v4
@@ -20,27 +19,33 @@ jobs:
       - name: Sync Fork
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # This keeps your main branch updated with the original
-          gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
+        run: gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
 
-      - name: Get Latest Release Info
+      - name: Get Latest Release Info & Hash
         id: get_info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Grabs the "Tag@PublishedDate" fingerprint
+          # 1. Grab Tag and Published Date
           INFO=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName,publishedAt --jq '.[0] | "\(.tagName)@\(.publishedAt)"')
-          echo "info=$INFO" >> $GITHUB_OUTPUT
-          echo "Latest release found: $INFO"
+          TAG=$(echo "$INFO" | cut -d'@' -f1)
+          
+          # 2. Fetch the Commit Hash (like the 'ea65542' from your patch notes)
+          HASH=$(gh api repos/smartcmd/MinecraftConsoles/commits/$TAG --jq '.sha' | cut -c1-7)
+          
+          # 3. Combine them into the ultimate fingerprint
+          INFO_WITH_HASH="${INFO}@${HASH}"
+          echo "info=$INFO_WITH_HASH" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Latest release found: $INFO_WITH_HASH"
 
-      - name: Check if Version or Date is New
+      - name: Check if Version is New
         id: check
         run: |
-          # Compare the fingerprint with your memory file
           if [ -f .last_backup_info ] && [ "$(cat .last_backup_info)" == "${{ steps.get_info.outputs.info }}" ]; then
             echo "match=true" >> $GITHUB_OUTPUT
-            echo "No changes in tag or date since last check 15 mins ago. Skipping."
+            echo "No changes since last check. Skipping."
           else
             echo "match=false" >> $GITHUB_OUTPUT
             echo "New update detected! Starting backup..."
@@ -51,37 +56,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Prepare Timestamp for the folder name
           TIMESTAMP=$(date +'%Y-%m-%d_%H-%M')
           
-          # 2. Setup Rclone
+          # Rclone Setup
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
           cat << EOF > ~/.config/rclone/rclone.conf
           ${{ secrets.RCLONE_CONF }}
           EOF
           
-          # 3. Extract just the Tag from the info string
-          TAG=$(echo "${{ steps.get_info.outputs.info }}" | cut -d'@' -f1)
-          # Make sure we remove any characters that Rclone/Windows might dislike
+          # Extract variables
+          TAG="${{ steps.get_info.outputs.tag }}"
+          HASH="${{ steps.get_info.outputs.hash }}"
           SAFE_TAG=$(echo "$TAG" | tr -cd '[:alnum:]._-')
           
-          # 4. Download assets and source
+          # Download files
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
           
-          # 5. Upload to Drive with the Tag in the folder name
-          # Format: gdrive:Backup_2026-03-06_18-30_
-          FOLDER_NAME="Backup_${TIMESTAMP}_"
+          # Upload to Drive with Hash in the folder name!
+          FOLDER_NAME="Backup_${TIMESTAMP}_${SAFE_TAG}_${HASH}"
           rclone copy ./backup_files "gdrive:$FOLDER_NAME" --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} -vv
           
-          # 6. Save new "Tag@Date" fingerprint
+          # Save memory to prevent Amnesia Loop
           echo "${{ steps.get_info.outputs.info }}" > .last_backup_info
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add .last_backup_info
           git commit -m "Update last backup info: ${{ steps.get_info.outputs.info }}"
           
-          # 7. Refresh local state to prevent pushing errors (The Loop Fix)
+          # Pull latest code to avoid push errors
           git pull --rebase origin main
           git push
