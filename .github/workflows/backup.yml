@@ -21,24 +21,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
 
-      - name: Get Latest Release Tag
-        id: get_tag
+      - name: Get Latest Release Info
+        id: get_info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName --jq '.[0].tagName')
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Latest release found is: $TAG"
+          # This grabs the Tag AND the Date it was published
+          INFO=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName,publishedAt --jq '.[0] | "\(.tagName)@\(.publishedAt)"')
+          echo "info=$INFO" >> $GITHUB_OUTPUT
+          echo "Latest release info: $INFO"
 
-      - name: Check if Version is New
+      - name: Check if Version or Date is New
         id: check
         run: |
-          if [ -f .last_backup_tag ] && [ "$(cat .last_backup_tag)" == "${{ steps.get_tag.outputs.tag }}" ]; then
+          # We compare the "Tag@Date" string to our memory file
+          if [ -f .last_backup_info ] && [ "$(cat .last_backup_info)" == "${{ steps.get_info.outputs.info }}" ]; then
             echo "match=true" >> $GITHUB_OUTPUT
-            echo "No new version detected. Skipping backup."
+            echo "No changes in tag or date. Skipping."
           else
             echo "match=false" >> $GITHUB_OUTPUT
-            echo "New version detected or first run! Starting backup..."
+            echo "New update detected! Starting backup..."
           fi
 
       - name: Backup to Google Drive
@@ -47,27 +49,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TIMESTAMP=$(date +'%Y-%m-%d_%H-%M')
-          
-          # Install & Config Rclone
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          cat << EOF > ~/.config/rclone/rclone.conf
-          ${{ secrets.RCLONE_CONF }}
-          EOF
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
           
-          # 1. Download compiled assets
-          gh release download "${{ steps.get_tag.outputs.tag }}" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
+          # We extract just the Tag from our info string to download it
+          TAG=$(echo "${{ steps.get_info.outputs.info }}" | cut -d'@' -f1)
+          gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
+          gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
           
-          # 2. Download source code zip
-          gh release download "${{ steps.get_tag.outputs.tag }}" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
-          
-          # 3. Upload to Drive (THIS LINE IS FIXED)
           rclone copy ./backup_files "gdrive:Nightly_$TIMESTAMP" --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} -vv
           
-          # Save this tag so we don't repeat the backup next hour
-          echo "${{ steps.get_tag.outputs.tag }}" > .last_backup_tag
+          # Save the new "Tag@Date" info to memory
+          echo "${{ steps.get_info.outputs.info }}" > .last_backup_info
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          git add .last_backup_tag
-          git commit -m "Update last backup tag to ${{ steps.get_tag.outputs.tag }}"
+          git add .last_backup_info
+          git commit -m "Update last backup info: ${{ steps.get_info.outputs.info }}"
           git push
