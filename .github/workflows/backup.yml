@@ -16,24 +16,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Sync Fork
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh repo sync ${{ github.repository }} --source smartcmd/MinecraftConsoles
+      # Note: The "Sync Fork" step has been completely removed!
 
       - name: Get Latest Release Info & Hash
         id: get_info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Grab Tag and Published Date
           INFO=$(gh release list --repo smartcmd/MinecraftConsoles --limit 1 --json tagName,publishedAt --jq '.[0] | "\(.tagName)@\(.publishedAt)"')
           TAG=$(echo "$INFO" | cut -d'@' -f1)
-          
-          # 2. Fetch the Commit Hash (like the 'ea65542' from your patch notes)
           HASH=$(gh api repos/smartcmd/MinecraftConsoles/commits/$TAG --jq '.sha' | cut -c1-7)
           
-          # 3. Combine them into the ultimate fingerprint
           INFO_WITH_HASH="${INFO}@${HASH}"
           echo "info=$INFO_WITH_HASH" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
@@ -58,33 +51,28 @@ jobs:
         run: |
           TIMESTAMP=$(date +'%Y-%m-%d_%H-%M')
           
-          # Rclone Setup
           sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
           cat << EOF > ~/.config/rclone/rclone.conf
           ${{ secrets.RCLONE_CONF }}
           EOF
           
-          # Extract variables
           TAG="${{ steps.get_info.outputs.tag }}"
           HASH="${{ steps.get_info.outputs.hash }}"
           SAFE_TAG=$(echo "$TAG" | tr -cd '[:alnum:]._-')
           
-          # Download files
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --pattern '*'
           gh release download "$TAG" --repo smartcmd/MinecraftConsoles --dir ./backup_files --archive zip
           
-          # Upload to Drive with Hash in the folder name!
           FOLDER_NAME="Backup_${TIMESTAMP}_${SAFE_TAG}_${HASH}"
           rclone copy ./backup_files "gdrive:$FOLDER_NAME" --drive-root-folder-id ${{ secrets.DRIVE_FOLDER_ID }} -vv
           
-          # Save memory to prevent Amnesia Loop
           echo "${{ steps.get_info.outputs.info }}" > .last_backup_info
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add .last_backup_info
           git commit -m "Update last backup info: ${{ steps.get_info.outputs.info }}"
           
-          # Pull latest code to avoid push errors
-          git pull --rebase origin main
+          # Added --autostash to make this pull 100% crash-proof against workspace files
+          git pull --rebase --autostash origin main
           git push
